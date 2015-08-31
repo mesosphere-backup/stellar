@@ -11,6 +11,8 @@ import mesos.native
 
 class StellarExecutor(mesos.interface.Executor):
     def launchTask(self, driver, task):
+        print "launchTask(%s)" % task
+
         def run_task():
             print "Running task %s" % task.task_id.value
             update = mesos_pb2.TaskStatus()
@@ -65,6 +67,7 @@ class StellarExecutor(mesos.interface.Executor):
                 # TODO(nnielsen): If slave is unreachable after a certain number of retries, send TASK_FAILED and abort.
                 # Collect the latest resource usage statistics.
                 for sample in json_from_url(monitor_endpoint):
+                    print 'Collecting sample at \'%s\'' % monitor_endpoint
                     if 'statistics' in sample and 'timestamp' not in sample['statistics']:
                         sample['statistics']['timestamp'] = time.time()
 
@@ -118,9 +121,11 @@ class StellarExecutor(mesos.interface.Executor):
         thread.start()
 
 if __name__ == "__main__":
+    time.sleep(1)
     print "Starting Stellar executor"
-    driver = mesos.native.MesosExecutorDriver(StellarExecutor())
-    sys.exit(0 if driver.run() == mesos_pb2.DRIVER_STOPPED else 1)
+    sys.exit(0)
+    # driver = mesos.native.MesosExecutorDriver(StellarExecutor())
+    # sys.exit(0 if driver.run() == mesos_pb2.DRIVER_STOPPED else 1)
 
 def validate_statistics_sample(sample):
     if 'framework_id' not in sample:

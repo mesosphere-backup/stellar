@@ -16,9 +16,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 import sys
 import time
+import urllib
+import uuid
 
 import mesos.interface
 from mesos.interface import mesos_pb2
@@ -27,18 +30,81 @@ import mesos.native
 TASK_CPUS = 0.1
 TASK_MEM = 128
 
-class StellarScheduler(mesos.interface.Scheduler):
+# TODO(nnielsen): Limit/control fanout per executor
+# TODO(nnielsen): Introduce built-in chaos-monkey (tasks and executors dies after X minutes).
+# TODO(nnielsen): Run 'Scheduler' in separate thread.
+
+def json_from_url(url):
+    while True:
+        try:
+            response = urllib.urlopen(url)
+            data = response.read()
+            return json.loads(data)
+        except IOError:
+            print "Could not load %s: retrying in one second" % url
+            time.sleep(1)
+            continue
+
+class Slave:
+    def __init__(self, hostname):
+        self.id = str(uuid.uuid4())
+        self.hostname = hostname
+
+class Scheduler:
+    def __init__(self):
+        self.master_info = None
+
+        # target i.e. which slaves _should_ be monitored
+        self.targets = {}
+
+        # changes (additions / removal) Which monitor tasks should be start or removed.
+        self.monitor = {}
+        self.staging = {}
+        self.unmonitor = {}
+
+        # current i.e. which slaves are currently monitored
+        self.current = {}
+
+    def update(self, master_info = None):
+        """
+        Get new node list from master
+        """
+        if master_info is not None:
+            self.master_info = master_info
+
+        state_endpoint = "http://" + self.master_info.hostname + ":" + str(self.master_info.port) + "/state.json"
+
+        state_json = json_from_url(state_endpoint)
+
+        new_targets = []
+        for slave in state_json['slaves']:
+            new_targets.append(slave['pid'].split('@')[1])
+
+        inactive_slaves = self.targets
+        for new_target in new_targets:
+            if new_target not in self.targets:
+                slave = Slave(new_target)
+                self.monitor[slave.id] = slave
+                self.targets[slave.hostname] = slave
+                del inactive_slaves[slave.hostname]
+
+        if len(inactive_slaves) > 0:
+            print "%d slaves to be unmonitored" % len(inactive_slaves)
+            for inactive_slave in inactive_slaves:
+                self.unmonitor[inactive_slave.id] = inactive_slave
+
+    def reconcile(self):
+        pass
+
+class MesosScheduler(mesos.interface.Scheduler):
     def __init__(self, executor):
-        self.implicitAcknowledgements = 1 
         self.executor = executor
-        self.taskData = {}
-        self.tasksLaunched = 0
-        self.tasksFinished = 0
-        self.messagesSent = 0
-        self.messagesReceived = 0
+        self.scheduler = Scheduler()
 
     def registered(self, driver, frameworkId, masterInfo):
+        # TODO(nnielsen): Persist in zookeeper
         print "Registered with framework ID %s" % frameworkId.value
+        self.scheduler.update(masterInfo)
 
     def resourceOffers(self, driver, offers):
         for offer in offers:
@@ -57,37 +123,40 @@ class StellarScheduler(mesos.interface.Scheduler):
             remainingCpus = offerCpus
             remainingMem = offerMem
 
-            while self.tasksLaunched < TOTAL_TASKS and \
-                  remainingCpus >= TASK_CPUS and \
-                  remainingMem >= TASK_MEM:
-                tid = self.tasksLaunched
-                self.tasksLaunched += 1
+            monitored_slaves = []
+            slaves = self.scheduler.monitor
+            for slave_id, slave in slaves.iteritems():
+                if remainingCpus >= TASK_CPUS and remainingMem >= TASK_MEM:
+                    monitored_slaves.append(slave.id)
+                    self.scheduler.staging = slave
 
-                print "Launching task %d using offer %s" \
-                      % (tid, offer.id.value)
+                    print "Launching task %s using offer %s" % (slave.id, offer.id.value)
 
-                task = mesos_pb2.TaskInfo()
-                task.task_id.value = str(tid)
-                task.slave_id.value = offer.slave_id.value
-                task.name = "task %d" % tid
-                task.executor.MergeFrom(self.executor)
+                    task = mesos_pb2.TaskInfo()
+                    task.task_id.value = slave.id
+                    task.slave_id.value = offer.slave_id.value
+                    task.name = "Monitor %s" % slave.hostname
+                    task.executor.MergeFrom(self.executor)
 
-                cpus = task.resources.add()
-                cpus.name = "cpus"
-                cpus.type = mesos_pb2.Value.SCALAR
-                cpus.scalar.value = TASK_CPUS
+                    cpus = task.resources.add()
+                    cpus.name = "cpus"
+                    cpus.type = mesos_pb2.Value.SCALAR
+                    cpus.scalar.value = TASK_CPUS
 
-                mem = task.resources.add()
-                mem.name = "mem"
-                mem.type = mesos_pb2.Value.SCALAR
-                mem.scalar.value = TASK_MEM
+                    mem = task.resources.add()
+                    mem.name = "mem"
+                    mem.type = mesos_pb2.Value.SCALAR
+                    mem.scalar.value = TASK_MEM
 
-                tasks.append(task)
-                self.taskData[task.task_id.value] = (
-                    offer.slave_id, task.executor.executor_id)
+                    task.data = json.dumps({'slave_location': slave.hostname, 'monitor_path': '/monitor/statistics.json'})
 
-                remainingCpus -= TASK_CPUS
-                remainingMem -= TASK_MEM
+                    tasks.append(task)
+
+                    remainingCpus -= TASK_CPUS
+                    remainingMem -= TASK_MEM
+
+            for monitored_slave in monitored_slaves:
+                del self.scheduler.monitor[monitored_slave]
 
             operation = mesos_pb2.Offer.Operation()
             operation.type = mesos_pb2.Offer.Operation.LAUNCH
@@ -96,40 +165,17 @@ class StellarScheduler(mesos.interface.Scheduler):
             driver.acceptOffers([offer.id], [operation])
 
     def statusUpdate(self, driver, update):
-        print "Task %s is in state %s" % \
-            (update.task_id.value, mesos_pb2.TaskState.Name(update.state))
+        print "Task %s is in state %s" % (update.task_id.value, mesos_pb2.TaskState.Name(update.state))
 
-        # Ensure the binary data came through.
-        if update.data != "data with a \0 byte":
-            print "The update data did not match!"
-            print "  Expected: 'data with a \\x00 byte'"
-            print "  Actual:  ", repr(str(update.data))
-            sys.exit(1)
-
+        # TODO(nnielsen): Update node list
         if update.state == mesos_pb2.TASK_FINISHED:
-            self.tasksFinished += 1
-            if self.tasksFinished == TOTAL_TASKS:
-                print "All tasks done, waiting for final framework message"
-
-            slave_id, executor_id = self.taskData[update.task_id.value]
-
-            self.messagesSent += 1
-            driver.sendFrameworkMessage(
-                executor_id,
-                slave_id,
-                'data with a \0 byte')
+            pass
 
         if update.state == mesos_pb2.TASK_LOST or \
            update.state == mesos_pb2.TASK_KILLED or \
            update.state == mesos_pb2.TASK_FAILED:
             print "Aborting because task %s is in unexpected state %s with message '%s'" \
                 % (update.task_id.value, mesos_pb2.TaskState.Name(update.state), update.message)
-            driver.abort()
-
-        # Explicitly acknowledge the update if implicit acknowledgements
-        # are not being used.
-        if not self.implicitAcknowledgements:
-            driver.acknowledgeStatusUpdate(update)
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
@@ -140,7 +186,9 @@ if __name__ == "__main__":
     executor.executor_id.value = "default"
     executor.command.value = "./collect.py"
     executor.name = "Stellar Executor"
-    executor.source = "stellar"
+
+    url = executor.command.uris.add()
+    url.value = "/Users/nnielsen/scratchpad/stellar/collect.py"
 
     framework = mesos_pb2.FrameworkInfo()
     framework.user = ""
@@ -163,19 +211,15 @@ if __name__ == "__main__":
         framework.principal = os.getenv("DEFAULT_PRINCIPAL")
 
         driver = mesos.native.MesosSchedulerDriver(
-            StellarScheduler(executor),
+            MesosScheduler(executor),
             framework,
             sys.argv[1],
-            implicitAcknowledgements,
             credential)
     else:
-        framework.principal = "test-framework-python"
-
         driver = mesos.native.MesosSchedulerDriver(
-            StellarScheduler(executor),
+            MesosScheduler(executor),
             framework,
-            sys.argv[1],
-            implicitAcknowledgements)
+            sys.argv[1])
 
     status = 0 if driver.run() == mesos_pb2.DRIVER_STOPPED else 1
 
@@ -183,3 +227,4 @@ if __name__ == "__main__":
     driver.stop();
 
     sys.exit(status)
+
