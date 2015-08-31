@@ -16,9 +16,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import Queue
 import json
 import os
 import sys
+import threading
 import time
 import urllib
 import uuid
@@ -27,12 +29,14 @@ import mesos.interface
 from mesos.interface import mesos_pb2
 import mesos.native
 
+from flask import Flask
+app = Flask('stellar')
+
 TASK_CPUS = 0.1
 TASK_MEM = 128
 
 # TODO(nnielsen): Limit/control fanout per executor
 # TODO(nnielsen): Introduce built-in chaos-monkey (tasks and executors dies after X minutes).
-# TODO(nnielsen): Run 'Scheduler' in separate thread.
 
 def json_from_url(url):
     while True:
@@ -50,6 +54,7 @@ class Slave:
         self.id = str(uuid.uuid4())
         self.hostname = hostname
 
+# TODO(nnielsen): Run Stellar scheduler in it's own thread.
 class Scheduler:
     def __init__(self):
         self.master_info = None
@@ -67,7 +72,8 @@ class Scheduler:
 
     def update(self, master_info = None):
         """
-        Get new node list from master
+        Get new node list from master.
+        If master_info is set (during registration and reregistration), a new master url will be set.
         """
         if master_info is not None:
             self.master_info = master_info
@@ -93,13 +99,56 @@ class Scheduler:
             for inactive_slave in inactive_slaves:
                 self.unmonitor[inactive_slave.id] = inactive_slave
 
-    def reconcile(self):
+
+# TODO(nnielsen): Share queue between monitor and flask thread.
+class Monitor:
+    def __init__(self, record_queue, request_queue):
+        # TODO(nnielsen): Keep samples for max 1hr
+        # TODO(nnielsen): Maintain circular buffer for samples.
+        self.record_queue = record_queue
+        self.request_queue = request_queue
+
+    def start(self):
+        def run_task():
+            # TODO(nnielsen): Use real select(). This can easily be a bottleneck.
+            default_timeout = 0.1
+            max_timeout = 2
+            timeout = default_timeout
+            while True:
+                try:
+                    record = self.record_queue.get_nowait()
+                    timeout = default_timeout
+                    print record
+                except Queue.Empty:
+                    timeout = max(timeout * 2, max_timeout)
+
+                time.sleep(timeout)
+
+
+        self.thread = threading.Thread(target=run_task)
+        self.thread.start()
+
+    def join(self):
+        self.thread.join()
+
+    def cluster(self):
         pass
 
+    def slave(self, slave_id):
+        pass
+
+    def framework(self, framework_id):
+        pass
+
+    def executor(self, framework_id, task_id):
+        pass
+
+
 class MesosScheduler(mesos.interface.Scheduler):
-    def __init__(self, executor):
+    def __init__(self, executor, record_queue):
         self.executor = executor
         self.scheduler = Scheduler()
+        self.record_queue = record_queue
 
     def registered(self, driver, frameworkId, masterInfo):
         # TODO(nnielsen): Persist in zookeeper
@@ -117,11 +166,12 @@ class MesosScheduler(mesos.interface.Scheduler):
                 elif resource.name == "mem":
                     offerMem += resource.scalar.value
 
-            print "Received offer %s with cpus: %s and mem: %s" \
-                  % (offer.id.value, offerCpus, offerMem)
+            print "Received offer %s with cpus: %s and mem: %s" % (offer.id.value, offerCpus, offerMem)
 
             remainingCpus = offerCpus
             remainingMem = offerMem
+
+            # TODO(nnielsen): Decline unused offers.
 
             monitored_slaves = []
             slaves = self.scheduler.monitor
@@ -148,7 +198,7 @@ class MesosScheduler(mesos.interface.Scheduler):
                     mem.type = mesos_pb2.Value.SCALAR
                     mem.scalar.value = TASK_MEM
 
-                    task.data = json.dumps({'slave_location': slave.hostname, 'monitor_path': '/monitor/statistics.json'})
+                    task.data = json.dumps({'slave_location': slave.hostname})
 
                     tasks.append(task)
 
@@ -167,6 +217,10 @@ class MesosScheduler(mesos.interface.Scheduler):
     def statusUpdate(self, driver, update):
         print "Task %s is in state %s" % (update.task_id.value, mesos_pb2.TaskState.Name(update.state))
 
+        if update.state == mesos_pb2.TASK_RUNNING:
+            if update.data is not None:
+                self.record_queue.put(update.data)
+
         # TODO(nnielsen): Update node list
         if update.state == mesos_pb2.TASK_FINISHED:
             pass
@@ -174,9 +228,26 @@ class MesosScheduler(mesos.interface.Scheduler):
         if update.state == mesos_pb2.TASK_LOST or \
            update.state == mesos_pb2.TASK_KILLED or \
            update.state == mesos_pb2.TASK_FAILED:
+            # TODO(nnielsen): Reschedule monitor task
             print "Aborting because task %s is in unexpected state %s with message '%s'" \
                 % (update.task_id.value, mesos_pb2.TaskState.Name(update.state), update.message)
 
+# Path                                        Description
+# /                                           Main hosted UI
+# /cluster                                    Aggregate cluster statistics
+# /framework/<framework id>/                  Aggregate statistics for framework
+# /framework/<framework id>/<executor id>/    Aggregate statistics for executor of framework
+@app.route('/')
+def ui():
+    return 'Stellar'
+
+@app.route('/cluster')
+def cluster():
+    cluster_stats = None
+    return json.dumps({})
+
+# TODO(nnielsen): Parse role from command line arguments.
+# TODO(nnielsen): Parse secret and principal from command line arguments.
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print "Usage: %s master" % sys.argv[0]
@@ -184,16 +255,18 @@ if __name__ == "__main__":
 
     executor = mesos_pb2.ExecutorInfo()
     executor.executor_id.value = "default"
-    executor.command.value = "./collect.py"
+    executor.command.value = "python collect.py"
     executor.name = "Stellar Executor"
 
     url = executor.command.uris.add()
-    url.value = "/Users/nnielsen/scratchpad/stellar/collect.py"
+    url.value = "/home/vagrant/stellar/collect.py"
 
     framework = mesos_pb2.FrameworkInfo()
     framework.user = ""
     framework.name = "Stellar"
     framework.checkpoint = True
+
+    record_queue = Queue.Queue()
 
     if os.getenv("MESOS_AUTHENTICATE"):
         print "Enabling authentication for the framework"
@@ -211,20 +284,31 @@ if __name__ == "__main__":
         framework.principal = os.getenv("DEFAULT_PRINCIPAL")
 
         driver = mesos.native.MesosSchedulerDriver(
-            MesosScheduler(executor),
+            MesosScheduler(executor, record_queue),
             framework,
             sys.argv[1],
             credential)
     else:
         driver = mesos.native.MesosSchedulerDriver(
-            MesosScheduler(executor),
+            MesosScheduler(executor, record_queue),
             framework,
             sys.argv[1])
+
+    monitor = Monitor(record_queue, None)
+    monitor.start()
+
+    def run_flask():
+        app.run(host='0.0.0.0')
+    http_thread = threading.Thread(target=run_flask)
+    http_thread.start()
 
     status = 0 if driver.run() == mesos_pb2.DRIVER_STOPPED else 1
 
     # Ensure that the driver process terminates.
-    driver.stop();
+    driver.stop()
+
+    monitor.join()
+
+    http_thread.join()
 
     sys.exit(status)
-
