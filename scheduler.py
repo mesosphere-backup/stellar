@@ -29,6 +29,8 @@ import mesos.interface
 from mesos.interface import mesos_pb2
 import mesos.native
 
+from flask import request
+
 from flask import Flask
 app = Flask('stellar')
 
@@ -62,6 +64,8 @@ class Scheduler:
         # target i.e. which slaves _should_ be monitored
         self.targets = {}
 
+        # TODO(nnielsen): Introduce set of slaves _being_ unmonitored. Message may be lost during
+        # master fail-over and scheduler should retry after timeout.
         # changes (additions / removal) Which monitor tasks should be start or removed.
         self.monitor = {}
         self.staging = {}
@@ -99,6 +103,25 @@ class Scheduler:
             for inactive_slave in inactive_slaves:
                 self.unmonitor[inactive_slave.id] = inactive_slave
 
+
+# TODO(nnielsen): Make this an 'Aggregate' instead (with count, min, max,
+# etc).
+class Average:
+    def __init__(self):
+        self.count = 0
+        self.sum = 0.0
+
+    def add(self, value):
+        self.sum += value
+        self.count += 1
+
+    def compute(self):
+        if self.count is 0:
+            return 0
+        return float(self.sum) / float(self.count)
+
+
+# TODO(nnielsen): Introduce stats() method which prints counts, last stats etc. for logging
 class Monitor:
     def __init__(self, record_queue):
         # TODO(nnielsen): Maintain circular buffer for samples.
@@ -106,10 +129,10 @@ class Monitor:
         self.stats_lock = threading.Lock()
 
         # Bucket size is 60 seconds
-        self.bucket_size = 5
+        self.bucket_size = 60
 
         # Keep samples for max 1hr
-        self.sample_limits = 10
+        self.sample_limits = 60
 
         # TODO(nnielsen): This bucket is prone to clock skew i.e. a single slave can invalidate the
         # averages if their times are more than one minutes apart. Make a small (5 minutes, for
@@ -130,91 +153,71 @@ class Monitor:
                 records = self.record_queue.get()
 
                 for record in records:
-                  ts = record['timestamp']
-                  current_minute = int(ts / self.bucket_size)
+                    ts = record['timestamp']
+                    current_minute = int(ts / self.bucket_size)
 
-                  if self.cluster_start < current_minute:
-                      print "Compute cluster and framework aggregates..."
-                      # Clear current minute average and update average list
-                      # Compute new aggregates
-                      frameworks = {}
-                      for sample in self.cluster_current:
-                          framework_id = sample['framework_id']
-                          executor_id = sample['executor_id']
+                    if self.cluster_start < current_minute:
+                        # Clear current minute average and update average list
+                        # Compute new aggregates
+                        frameworks = {}
+                        for sample in self.cluster_current:
+                            framework_id = sample['framework_id']
+                            executor_id = sample['executor_id']
 
-                          if framework_id not in frameworks:
-                              frameworks[framework_id] = {}
+                            if framework_id not in frameworks:
+                                frameworks[framework_id] = {}
 
-                          if executor_id not in frameworks[framework_id]:
-                              frameworks[framework_id][executor_id] = []
+                            if executor_id not in frameworks[framework_id]:
+                                frameworks[framework_id][executor_id] = []
 
-                          frameworks[framework_id][executor_id].append(sample)
+                            frameworks[framework_id][executor_id].append(sample)
 
-                      # TODO(nnielsen): Make this an 'Aggregate' instead (with count, min, max,
-                      # etc).
-                      class Average:
-                          def __init__(self):
-                              self.count = 0
-                              self.sum = 0.0
+                        self.stats_lock.acquire()
 
-                          def add(self, value):
-                              self.sum += value
-                              self.count += 1
+                        cluster_cpu_slack = Average()
+                        cluster_cpu_usage = Average()
+                        cluster_mem_slack = Average()
+                        cluster_mem_usage = Average()
 
-                          def compute(self):
-                              if self.count is 0:
-                                  return 0
-                              return float(self.sum) / float(self.count)
+                        # TODO(nnielsen): Compute and store framework and executor aggregates.
+                        for framework_id, framework in frameworks.iteritems():
+                            for executor_id, executor in framework.iteritems():
+                                for sample in executor:
+                                    # Add samples to corresponding aggregates
+                                    cluster_cpu_slack.add(sample['cpu_slack'])
+                                    cluster_cpu_usage.add(sample['cpu_usage'])
+                                    cluster_mem_slack.add(sample['mem_slack'])
+                                    cluster_mem_usage.add(sample['mem_usage'])
 
-                      self.stats_lock.acquire()
+                        # TODO(nnielsen): Due to the post processing, we end up with a zero sample
+                        # (all metrics are zero).
+                        self.cluster_avgs[self.cluster_current_index] = {
+                            'cpu_slack': cluster_cpu_slack.compute(),
+                            'cpu_usage': cluster_cpu_usage.compute(),
+                            'mem_slack': cluster_mem_slack.compute(),
+                            'mem_usage': cluster_mem_usage.compute(),
+                            'timestamp': self.cluster_start
+                        }
 
-                      self.cluster_start = current_minute
+                        self.cluster_start = current_minute
 
-                      cluster_cpu_slack = Average()
-                      cluster_cpu_usage = Average()
-                      cluster_mem_slack = Average()
-                      cluster_mem_usage = Average()
+                        self.cluster_current_index += 1
 
-                      # TODO(nnielsen): Compute and store framework and executor aggregates.
-                      for framework_id, framework in frameworks.iteritems():
-                          framework_slack_avg = Average()
+                        # Roll over.
+                        self.cluster_current_index = self.cluster_current_index % self.sample_limits
 
-                          for executor_id, executor in framework.iteritems():
-                              executor_slack_avg = Average()
+                        self.stats_lock.release()
 
-                              for sample in executor:
-                                  # Add samples to corresponding aggregates
-                                  cluster_cpu_slack.add(sample['cpu_slack'])
-                                  cluster_cpu_usage.add(sample['cpu_usage'])
-                                  cluster_mem_slack.add(sample['mem_slack'])
-                                  cluster_mem_usage.add(sample['mem_usage'])
+                        # Reset current 1s samples
+                        self.cluster_current = []
 
+                    if self.cluster_start > current_minute:
+                        # Skip sample, already rolled over.
+                        print "Warning: skipping sample due to previous roll over"
+                        continue
 
-                      self.cluster_avgs[self.cluster_current_index] = {
-                          'cpu_slack': cluster_cpu_slack.compute(),
-                          'cpu_usage': cluster_cpu_usage.compute(),
-                          'mem_slack': cluster_mem_slack.compute(),
-                          'mem_usage': cluster_mem_usage.compute()
-                      }
-
-                      self.cluster_current_index += 1
-
-                      # Roll over.
-                      self.cluster_current_index = self.cluster_current_index % self.sample_limits
-
-                      self.stats_lock.release()
-
-                      # Reset current 1s samples
-                      self.cluster_current = []
-
-                  if self.cluster_start > current_minute:
-                      # Skip sample, already rolled over.
-                      print "Warning: skipping sample due to previous roll over"
-                      continue
-
-                  # Add to current bucket
-                  print "Stored sample in monitor"
-                  self.cluster_current.append(record)
+                    # Add to current bucket
+                    self.cluster_current.append(record)
 
         self.thread = threading.Thread(target=run_task)
         self.thread.start()
@@ -226,8 +229,11 @@ class Monitor:
         samples = []
         self.stats_lock.acquire()
 
+        # Make sure we don't exceed the sample size.
         limit = min(minutes, self.sample_limits)
 
+        # self.cluster_current_index points to current sample (which is currently being built). We
+        # need to subtract one to get previous (not in progress) aggregate.
         start = self.cluster_current_index - 1
         if start < 0:
             start = 0
@@ -269,8 +275,6 @@ class MesosScheduler(mesos.interface.Scheduler):
 
             remainingCpus = offerCpus
             remainingMem = offerMem
-
-            # TODO(nnielsen): Decline unused offers.
 
             monitored_slaves = []
             slaves = self.scheduler.monitor
@@ -345,7 +349,8 @@ def ui():
 
 @app.route('/cluster')
 def cluster():
-    return json.dumps(monitor.cluster())
+    limit = int(request.args.get('limit', 1))
+    return json.dumps(monitor.cluster(limit))
 
 # TODO(nnielsen): Parse role from command line arguments.
 # TODO(nnielsen): Parse secret and principal from command line arguments.
@@ -359,6 +364,7 @@ if __name__ == "__main__":
     executor.command.value = "python collect.py"
     executor.name = "Stellar Executor"
 
+    # TODO(nnielsen): Run from docker hub instead.
     url = executor.command.uris.add()
     url.value = "/home/vagrant/stellar/collect.py"
 
@@ -367,6 +373,9 @@ if __name__ == "__main__":
     framework.name = "Stellar"
     framework.checkpoint = True
 
+    #
+    # Start Mesos scheduler (backed by it's own thread).
+    #
     if os.getenv("MESOS_AUTHENTICATE"):
         print "Enabling authentication for the framework"
 
@@ -393,8 +402,14 @@ if __name__ == "__main__":
             framework,
             sys.argv[1])
 
+    #
+    # Start monitor thread
+    #
     monitor.start()
 
+    #
+    # Host stats endpoints
+    #
     def run_flask():
         app.run(host='0.0.0.0')
     http_thread = threading.Thread(target=run_flask)
