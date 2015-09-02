@@ -1,54 +1,14 @@
-import argparse
 import json
-import requests
+import json_helper
 import sys
 import threading
 import time
-import urllib
 
 import mesos.interface
 from mesos.interface import mesos_pb2
 import mesos.native
+import metrics
 
-def json_from_url(url):
-    # TODO(nnielsen): Introduce exp backoff and limits.
-    # TODO(nnielsen): Throw exception when limit is reached.
-    while True:
-        try:
-            response = urllib.urlopen(url)
-            data = response.read()
-            return json.loads(data)
-        except IOError:
-            print "Could not load %s: retrying in one second" % url
-            time.sleep(1)
-            continue
-
-def validate_statistics_sample(sample):
-    if 'framework_id' not in sample:
-        print 'Framework ID not found in sample'
-        return False
-
-    if 'executor_id' not in sample:
-        print 'Executor ID not found in sample'
-        return False
-
-    if 'statistics' not in sample:
-        print 'statistics not found in sample'
-        return False
-
-    if 'timestamp' not in sample['statistics']:
-        print 'timestamp not found in sample'
-        return False
-
-    if 'cpus_user_time_secs' not in sample['statistics']:
-        print 'cpu user time not found in sample'
-        return False
-
-    if 'cpus_system_time_secs' not in sample['statistics']:
-        print 'cpu system time not found in sample'
-        return False
-
-    return True
 
 class StellarExecutor(mesos.interface.Executor):
     def launchTask(self, driver, task):
@@ -69,7 +29,6 @@ class StellarExecutor(mesos.interface.Executor):
             print "Validating task.data..."
 
             # Validate task.data
-            task_json = None
             try:
                 if task.data is None:
                     return fail('Data field not set for task; cannot monitor slave')
@@ -89,7 +48,7 @@ class StellarExecutor(mesos.interface.Executor):
             monitor_endpoint = 'http://%s/monitor/statistics.json' % slave_location
             state_endpoint = 'http://%s/state.json' % slave_location
 
-            slave_state = json_from_url(state_endpoint)
+            slave_state = json_helper.from_url(state_endpoint)
             slave_id = slave_state['id']
 
             print "Resolved slave id: %s" % slave_id
@@ -119,13 +78,13 @@ class StellarExecutor(mesos.interface.Executor):
                 # Collect the latest resource usage statistics.
                 # TODO(nnielsen): Make sample rate configurable.
                 # TODO(nnielsen): Batch samples.
-                for sample in json_from_url(monitor_endpoint):
+                for sample in json_helper.from_url(monitor_endpoint):
                     print 'Collecting sample at \'%s\'' % monitor_endpoint
                     if 'statistics' in sample and 'timestamp' not in sample['statistics']:
                         sample['statistics']['timestamp'] = time.time()
 
                     # Validate sample
-                    if validate_statistics_sample(sample) == False:
+                    if not metrics.validate_statistics_sample(sample):
                         print "Warning: partial sample %s" % sample
                         continue
 
