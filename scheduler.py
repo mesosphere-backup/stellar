@@ -54,6 +54,9 @@ class Scheduler:
         for new_target in new_targets:
             if new_target not in self.targets:
                 slave = Slave(new_target)
+
+                # TODO(nnielsen): Persist map id -> host to zookeeper.
+
                 self.monitor[slave.id] = slave
                 self.targets[slave.hostname] = slave
                 del inactive_slaves[slave.hostname]

@@ -47,6 +47,7 @@ class StellarExecutor(mesos.interface.Executor):
             slave_location = task_json['slave_location']
             monitor_endpoint = 'http://%s/monitor/statistics.json' % slave_location
             state_endpoint = 'http://%s/state.json' % slave_location
+            metrics_endpoint = 'http://%s/metrics/snapshot' % slave_location
 
             slave_state = json_helper.from_url(state_endpoint)
             slave_id = slave_state['id']
@@ -73,6 +74,15 @@ class StellarExecutor(mesos.interface.Executor):
                 stellar_samples = []
 
                 print "Collecting sample for %s" % monitor_endpoint
+
+                metrics_snapshot = json_helper.from_url(metrics_endpoint)
+                cpus_total = metrics_snapshot['slave/cpus_total']
+                cpus_used = metrics_snapshot['slave/cpus_used']
+                cpus_allocation_slack = cpus_total - cpus_used
+
+                mem_total = metrics_snapshot['slave/mem_total']
+                mem_used = metrics_snapshot['slave/mem_used']
+                mem_allocation_slack = mem_total - mem_used
 
                 # TODO(nnielsen): If slave is unreachable after a certain number of retries, send TASK_FAILED and abort.
                 # Collect the latest resource usage statistics.
@@ -119,10 +129,12 @@ class StellarExecutor(mesos.interface.Executor):
                             'slave_id': slave_id,
                             'framework_id': framework_id,
                             'executor_id': executor_id,
-                            'cpu_slack': cpu_slack,
+                            'cpu_usage_slack': cpu_slack,
                             'cpu_usage': cpu_usage,
-                            'mem_slack': mem_slack,
+                            'cpu_allocation_slack': cpus_allocation_slack,
+                            'mem_usage_slack': mem_slack,
                             'mem_usage': mem_usage,
+                            'mem_allocation_slack': mem_allocation_slack,
                             'timestamp': sample['statistics']['timestamp']
                         })
 

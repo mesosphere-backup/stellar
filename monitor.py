@@ -7,6 +7,8 @@ class Average:
     def __init__(self):
         self.count = 0
         self.sum = 0.0
+        self.min = None
+        self.max = None
 
     def add(self, value):
         self.sum += value
@@ -21,15 +23,14 @@ class Average:
 # TODO(nnielsen): Introduce stats() method which prints counts, last stats etc. for logging
 class Monitor:
     def __init__(self, record_queue):
-        # TODO(nnielsen): Maintain circular buffer for samples.
         self.record_queue = record_queue
         self.stats_lock = threading.Lock()
 
         # Bucket size is 60 seconds
-        self.bucket_size = 60
+        self.bucket_size = 6
 
         # Keep samples for max 1hr
-        self.sample_limits = 60
+        self.sample_limits = 10
 
         # TODO(nnielsen): This bucket is prone to clock skew i.e. a single slave can invalidate the
         # averages if their times are more than one minutes apart. Make a small (5 minutes, for
@@ -55,7 +56,13 @@ class Monitor:
                     ts = record['timestamp']
                     current_minute = int(ts / self.bucket_size)
 
-                    if self.cluster_start < current_minute:
+                    if self.cluster_start == 0:
+
+                        self.stats_lock.acquire()
+                        self.cluster_start = current_minute
+                        self.stats_lock.release()
+
+                    elif self.cluster_start < current_minute:
                         # Clear current minute average and update average list
                         # Compute new aggregates
                         frameworks = {}
@@ -73,9 +80,12 @@ class Monitor:
 
                         self.stats_lock.acquire()
 
-                        cluster_cpu_slack = Average()
+                        # TODO(nnielsen):
+                        cluster_cpu_allocation_slack = Average()
+                        cluster_cpu_usage_slack = Average()
                         cluster_cpu_usage = Average()
-                        cluster_mem_slack = Average()
+                        cluster_mem_allocation_slack = Average()
+                        cluster_mem_usage_slack = Average()
                         cluster_mem_usage = Average()
 
                         # TODO(nnielsen): Compute and store framework and executor aggregates.
@@ -83,19 +93,21 @@ class Monitor:
                             for executor_id, executor in framework.iteritems():
                                 for sample in executor:
                                     # Add samples to corresponding aggregates
-                                    cluster_cpu_slack.add(sample['cpu_slack'])
+                                    cluster_cpu_allocation_slack.add(sample['cpu_allocation_slack'])
+                                    cluster_cpu_usage_slack.add(sample['cpu_usage_slack'])
                                     cluster_cpu_usage.add(sample['cpu_usage'])
-                                    cluster_mem_slack.add(sample['mem_slack'])
+                                    cluster_mem_allocation_slack.add(sample['mem_allocation_slack'])
+                                    cluster_mem_usage_slack.add(sample['mem_usage_slack'])
                                     cluster_mem_usage.add(sample['mem_usage'])
 
-                        # TODO(nnielsen): Due to the post processing, we end up with a zero sample
-                        # (all metrics are zero).
                         self.cluster_avgs[self.cluster_current_index] = {
-                            'cpu_slack': cluster_cpu_slack.compute(),
-                            'cpu_usage': cluster_cpu_usage.compute(),
-                            'mem_slack': cluster_mem_slack.compute(),
-                            'mem_usage': cluster_mem_usage.compute(),
-                            'timestamp': self.cluster_start
+                            'cpu_allocation_slack': cluster_cpu_allocation_slack.compute(),
+                            'cpu_usage_slack': cluster_cpu_usage_slack.compute(),
+                            'cpu_usage':       cluster_cpu_usage.compute(),
+                            'mem_allocation_slack': cluster_mem_allocation_slack.compute(),
+                            'mem_usage_slack': cluster_mem_usage_slack.compute(),
+                            'mem_usage':       cluster_mem_usage.compute(),
+                            'timestamp':       self.cluster_start
                         }
 
                         self.cluster_start = current_minute
@@ -110,7 +122,7 @@ class Monitor:
                         # Reset current 1s samples
                         self.cluster_current = []
 
-                    if self.cluster_start > current_minute:
+                    elif self.cluster_start > current_minute:
                         # Skip sample, already rolled over.
                         print "Warning: skipping sample due to previous roll over"
                         continue

@@ -29,7 +29,7 @@ import mesos.native
 
 import mesos_scheduler
 
-from flask import request
+from flask import request, render_template
 from flask import Flask
 
 # TODO(nnielsen): Use GLOG for debug logging (and leaving log lines in place).
@@ -47,19 +47,22 @@ m = monitor.Monitor(record_queue)
 # /framework/<framework id>/<executor id>/    Aggregate statistics for executor of framework
 app = Flask('stellar')
 
+
 @app.route('/')
 def ui():
-    return 'Stellar'
+    return render_template("index.html")
 
 
 @app.route('/cluster')
 def cluster():
     limit = int(request.args.get('limit', 1))
+    print "Requesting %d samples" % limit
     return json.dumps(m.cluster(limit))
 
 
 # TODO(nnielsen): Parse role from command line arguments.
 # TODO(nnielsen): Parse secret and principal from command line arguments.
+# TODO(nnielsen): Make Flask port configurable
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print "Usage: %s master" % sys.argv[0]
@@ -82,6 +85,10 @@ if __name__ == "__main__":
     framework.user = ""
     framework.name = "Stellar"
     framework.checkpoint = True
+
+    # TODO(nnielsen): Get from ip from host.
+    framework.webui_url = "http://127.0.1.1:5000/"
+
     # TODO(nnielsen): Reregister with existing FrameworkID.
 
     #
