@@ -15,10 +15,12 @@ class MesosScheduler(mesos.interface.Scheduler):
         self.scheduler = scheduler.Scheduler()
         self.record_queue = record_queue
 
-    def registered(self, driver, frameworkId, masterInfo):
+        # TODO(nnielsen): Periodically run reconciliation and node updates.
+
+    def registered(self, driver, framework_id, master_info):
         # TODO(nnielsen): Persist in zookeeper
-        print "Registered with framework ID %s" % frameworkId.value
-        self.scheduler.update(masterInfo)
+        print "Registered with framework ID %s" % framework_id.value
+        self.scheduler.update(master_info)
 
     def resourceOffers(self, driver, offers):
         for offer in offers:
@@ -42,7 +44,6 @@ class MesosScheduler(mesos.interface.Scheduler):
             for slave_id, slave in slaves.iteritems():
                 if remaining_cpus >= TASK_CPUS and remaining_mem >= TASK_MEM:
                     monitored_slaves.append(slave.id)
-                    self.scheduler.staging = slave
 
                     print "Launching task %s using offer %s" % (slave.id, offer.id.value)
 
@@ -69,11 +70,10 @@ class MesosScheduler(mesos.interface.Scheduler):
                     remaining_cpus -= TASK_CPUS
                     remaining_mem -= TASK_MEM
 
+            # Update slave state (move from monitor -> staging list) in a subsequent step, as we want to avoid
+            # deleting items from the list we are iterating.
             for monitored_slave in monitored_slaves:
-                del self.scheduler.monitor[monitored_slave]
-
-            print "Slaves to monitor: %d" % len(slaves)
-            print "Launching %d tasks" % len(tasks)
+                self.scheduler.status_update(monitored_slave, mesos_pb2.TASK_STAGING)
 
             operation = mesos_pb2.Offer.Operation()
             operation.type = mesos_pb2.Offer.Operation.LAUNCH
@@ -84,19 +84,9 @@ class MesosScheduler(mesos.interface.Scheduler):
     def statusUpdate(self, driver, update):
         print "Task %s is in state %s" % (update.task_id.value, mesos_pb2.TaskState.Name(update.state))
 
+        self.scheduler.status_update(update.task_id.value, update.state)
+
+        # Pump samples through monitor.
         if update.state == mesos_pb2.TASK_RUNNING:
             if update.data is not None and 'timestamp' in update.data:
                 self.record_queue.put(json.loads(update.data))
-
-        # TODO(nnielsen): Periodically check for new/deactivated slaves with monitor.update()
-
-        if update.state == mesos_pb2.TASK_FINISHED:
-            # TODO(nnielsen): Remove slave from current list.
-            scheduler.update()
-
-        if update.state == mesos_pb2.TASK_LOST or \
-           update.state == mesos_pb2.TASK_KILLED or \
-           update.state == mesos_pb2.TASK_FAILED:
-            # TODO(nnielsen): Reschedule monitor task
-            print "Aborting because task %s is in unexpected state %s with message '%s'" \
-                % (update.task_id.value, mesos_pb2.TaskState.Name(update.state), update.message)

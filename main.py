@@ -32,6 +32,7 @@ import mesos_scheduler
 from flask import request
 from flask import Flask
 
+# TODO(nnielsen): Use GLOG for debug logging (and leaving log lines in place).
 # TODO(nnielsen): Limit/control fan-out per executor
 # TODO(nnielsen): Introduce built-in chaos-monkey (tasks and executors dies after X minutes).
 
