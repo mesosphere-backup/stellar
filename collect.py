@@ -75,6 +75,7 @@ class StellarExecutor(mesos.interface.Executor):
 
                 print "Collecting sample for %s" % monitor_endpoint
 
+                # Compute slave global allocation slacks.
                 metrics_snapshot = json_helper.from_url(metrics_endpoint)
                 cpus_total = metrics_snapshot['slave/cpus_total']
                 cpus_used = metrics_snapshot['slave/cpus_used']
@@ -88,6 +89,7 @@ class StellarExecutor(mesos.interface.Executor):
                 # Collect the latest resource usage statistics.
                 # TODO(nnielsen): Make sample rate configurable.
                 # TODO(nnielsen): Batch samples.
+                # TODO(nnielsen): We can adjust sample rate based on time of previous request.
                 for sample in json_helper.from_url(monitor_endpoint):
                     print 'Collecting sample at \'%s\'' % monitor_endpoint
                     if 'statistics' in sample and 'timestamp' not in sample['statistics']:
