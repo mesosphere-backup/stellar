@@ -1,5 +1,6 @@
 import uuid
 import json_helper
+import copy
 
 import mesos.interface
 from mesos.interface import mesos_pb2
@@ -53,7 +54,8 @@ class Scheduler:
             new_targets.append(slave['pid'].split('@')[1])
 
         # Make copy of current targets, to identify deactivated slaves
-        inactive_slaves = self.targets
+        # TODO(nnielsen): Find lighter weight way of doing this.
+        inactive_slaves = copy.deepcopy(self.targets)
 
         for new_target in new_targets:
             if new_target not in self.targets:
@@ -62,8 +64,10 @@ class Scheduler:
                 # TODO(nnielsen): Persist map id -> host to zookeeper.
 
                 self.monitor[slave.id] = slave
-                self.targets[slave.hostname] = slave
-                del inactive_slaves[slave.hostname]
+                self.targets[new_target] = slave
+
+                if new_target in inactive_slaves:
+                    del inactive_slaves[new_target]
 
         if len(inactive_slaves) > 0:
             print "%d slaves to be unmonitored" % len(inactive_slaves)
@@ -71,17 +75,14 @@ class Scheduler:
                 # TODO(nnielsen): Remove from monitor queue as well.
                 self.unmonitor[inactive_slave.id] = inactive_slave
 
-    def status_update(self, slave_id, state):
-        print "########## Status Update ##########"
-        print "Slaves to monitor:        %d" % len(self.monitor)
-        print "Slaves staging:           %d" % len(self.staging)
-        print "Slaves monitored:         %d" % len(self.current)
-        print "Slaves to unmonitor:      %d" % len(self.unmonitor)
-        print "###################################"
+        self.stats()
 
+    def status_update(self, slave_id, state):
         # If task is staging (synthesized by the mesos scheduler loop to represent 'launched but not yet started',
         # we move slave from 'monitor' to 'staging' list. If the launch fails, we need to move the slave back to the
         # 'monitor' list.
+        print "Received %s in state %d %d" % (slave_id, state, mesos_pb2.TASK_LOST)
+
         if state == mesos_pb2.TASK_STAGING:
             if slave_id not in self.monitor:
                 print "WARNING: Received TASK_STAGING for non-monitored task"
@@ -91,21 +92,27 @@ class Scheduler:
                 self.staging[slave_id] = slave
                 del self.monitor[slave_id]
 
-        if state == mesos_pb2.TASK_RUNNING:
+        elif state == mesos_pb2.TASK_RUNNING:
             if slave_id in self.staging:
                 print "Task %s is now monitoring" % slave_id
                 slave = self.staging[slave_id]
                 del self.staging[slave_id]
                 self.current[slave_id] = slave
 
-        if state == mesos_pb2.TASK_LOST or state == mesos_pb2.TASK_FAILED or state == mesos_pb2.TASK_ERROR:
+        elif (state == mesos_pb2.TASK_LOST) or (state == mesos_pb2.TASK_FAILED) or (state == mesos_pb2.TASK_ERROR):
+            print "Lost task %s: rescheduling for monitoring" % slave_id
+
             if slave_id in self.current:
-                print "Lost task %s: rescheduling for monitoring" % slave_id
                 slave = self.current[slave_id]
                 del self.current[slave_id]
                 self.monitor[slave_id] = slave
 
-        if state == mesos_pb2.TASK_KILLED:
+            elif slave_id in self.staging:
+                slave = self.staging[slave_id]
+                del self.staging[slave_id]
+                self.monitor[slave_id] = slave
+
+        elif state == mesos_pb2.TASK_KILLED:
             if slave_id not in self.unmonitor:
                 if slave_id in self.current:
                     print "Unintentional kill of task %s: rescheduling" % slave_id
@@ -118,3 +125,16 @@ class Scheduler:
                     slave = self.staging[slave_id]
                     del self.staging[slave_id]
                     self.monitor[slave_id] = slave
+        else:
+            print "Warning: unhandled task state"
+
+        self.stats()
+
+    def stats(self):
+        # TODO(nnielsen): Update stats/metrics object instead.
+        print "########## Status Update ##########"
+        print "Slaves to monitor:        %d" % len(self.monitor)
+        print "Slaves staging:           %d" % len(self.staging)
+        print "Slaves monitored:         %d" % len(self.current)
+        print "Slaves to unmonitor:      %d" % len(self.unmonitor)
+        print "###################################"
