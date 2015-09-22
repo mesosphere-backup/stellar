@@ -1,8 +1,4 @@
 def validate_statistics_sample(sample):
-    """
-
-    :rtype : Boolean
-    """
     if 'framework_id' not in sample:
         print 'Framework ID not found in sample'
         return False

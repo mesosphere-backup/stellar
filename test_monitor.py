@@ -1,5 +1,7 @@
 from unittest import TestCase
 
+import unittest
+
 import monitor
 import Queue
 import time
@@ -62,3 +64,6 @@ class TestMonitor(TestCase):
 
         m.stop()
         m.join()
+
+if __name__ == '__main__':
+    unittest.main()

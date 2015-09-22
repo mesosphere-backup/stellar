@@ -15,6 +15,7 @@ class Slave:
 # TODO(nnielsen): Run Stellar scheduler in it's own thread.
 # TODO(nnielsen): Introduce print_stats() method which prints counts, last stats etc. for logging
 # TODO(nnielsen): Introduce stats() method which return recent metrics
+# TODO(nnielsen): Introduce heart beats from the executors.
 class Scheduler:
     def __init__(self):
         self.master_info = None
@@ -33,7 +34,7 @@ class Scheduler:
         self.current = {}
 
     # TODO(nnielsen): Verify slave removal.
-    def update(self, master_info=None):
+    def update(self, master_info=None, state_json=None):
         """
         Get new node list from master.
         If master_info is set (during registration and reregistration), a new master url will be set.
@@ -41,9 +42,10 @@ class Scheduler:
         if master_info is not None:
             self.master_info = master_info
 
-        state_endpoint = "http://" + self.master_info.hostname + ":" + str(self.master_info.port) + "/state.json"
-
-        state_json = json_helper.from_url(state_endpoint)
+        # For testing, allow caller to give state_json.
+        if state_json is None:
+            state_endpoint = "http://" + self.master_info.hostname + ":" + str(self.master_info.port) + "/state.json"
+            state_json = json_helper.from_url(state_endpoint)
 
         # Get node list
         new_targets = []
