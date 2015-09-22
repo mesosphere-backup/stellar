@@ -64,6 +64,8 @@ def cluster():
 # TODO(nnielsen): Parse secret and principal from command line arguments.
 # TODO(nnielsen): Make Flask port configurable
 if __name__ == "__main__":
+    """
+    """
     if len(sys.argv) != 2:
         print "Usage: %s master" % sys.argv[0]
         sys.exit(1)
@@ -137,6 +139,9 @@ if __name__ == "__main__":
 
     # Ensure that the driver process terminates.
     driver.stop()
+
+    # TODO(nnielsen): Signal stop() to monitor thread.
+    # TODO(nnielsen): Signal stop() to HTTP thread.
 
     m.join()
 

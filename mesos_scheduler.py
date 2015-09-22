@@ -89,4 +89,5 @@ class MesosScheduler(mesos.interface.Scheduler):
         # Pump samples through monitor.
         if update.state == mesos_pb2.TASK_RUNNING:
             if update.data is not None and 'timestamp' in update.data:
+                # TODO(nnielsen): Write up JSON Schema for status update data.
                 self.record_queue.put(json.loads(update.data))

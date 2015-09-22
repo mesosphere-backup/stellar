@@ -1,4 +1,6 @@
 import threading
+import Queue
+import json
 
 
 # TODO(nnielsen): Make this an 'Aggregate' instead (with count, min, max,
@@ -20,17 +22,55 @@ class Average:
         return float(self.sum) / float(self.count)
 
 
-# TODO(nnielsen): Introduce stats() method which prints counts, last stats etc. for logging
+def validate_record(record):
+    if 'timestamp' not in record:
+        return False
+
+    if not isinstance(record['timestamp'], float):
+        return False
+
+    if 'framework_id' not in record:
+        return False
+
+    if 'executor_id' not in record:
+        return False
+
+    if 'cpu_allocation_slack' not in record:
+        return False
+
+    if 'cpu_usage_slack' not in record:
+        return False
+
+    if 'cpu_usage' not in record:
+        return False
+
+    if 'mem_allocation_slack' not in record:
+        return False
+
+    if 'mem_usage_slack' not in record:
+        return False
+
+    if 'mem_usage' not in record:
+        return False
+
+    if 'timestamp' not in record:
+        return False
+
+    return True
+
+
+# TODO(nnielsen): Introduce print_stats() method which prints counts, last stats etc. for logging
+# TODO(nnielsen): Introduce stats() method which return recent metrics
 class Monitor:
-    def __init__(self, record_queue):
+    def __init__(self, record_queue, bucket_size=60, sample_limits=60):
         self.record_queue = record_queue
         self.stats_lock = threading.Lock()
 
         # Bucket size is 60 seconds
-        self.bucket_size = 6
+        self.bucket_size = bucket_size
 
         # Keep samples for max 1hr
-        self.sample_limits = 10
+        self.sample_limits = sample_limits
 
         # TODO(nnielsen): This bucket is prone to clock skew i.e. a single slave can invalidate the
         # averages if their times are more than one minutes apart. Make a small (5 minutes, for
@@ -47,12 +87,45 @@ class Monitor:
 
         self.thread = None
 
+        # Cause monitor thread to eventually stop.
+        self.stop_status = False
+        self.stop_lock = threading.Lock()
+
+        # Metrics
+        self.metrics = {
+            '/samples/count': 0,
+            '/rollover/count': 0
+        }
+
     def start(self):
         def run_task():
+            iteration = 0
+
             while True:
-                records = self.record_queue.get()
+                # Check for stop request every 10 iteration.
+                iteration += 1
+                if iteration > 2:
+                    iteration = 0
+
+                    # Get copy of stop
+                    self.stop_lock.acquire()
+                    status = self.stop_status
+                    self.stop_lock.release()
+
+                    if status is True:
+                        print "Stopping monitor!"
+                        return
+
+                try:
+                    records = self.record_queue.get(True, 1)
+                except Queue.Empty:
+                    continue
 
                 for record in records:
+                    if not validate_record(record):
+                        print "Skipping sample: malformed %s" % json.dumps(record)
+                        continue
+
                     ts = record['timestamp']
                     current_minute = int(ts / self.bucket_size)
 
@@ -80,7 +153,7 @@ class Monitor:
 
                         self.stats_lock.acquire()
 
-                        # TODO(nnielsen):
+                        # TODO(nnielsen): Wrap 'Average' or 'Aggregate' for set of metrics.
                         cluster_cpu_allocation_slack = Average()
                         cluster_cpu_usage_slack = Average()
                         cluster_cpu_usage = Average()
@@ -135,6 +208,11 @@ class Monitor:
 
     def join(self):
         self.thread.join()
+
+    def stop(self):
+        self.stop_lock.acquire()
+        self.stop_status = True
+        self.stop_lock.release()
 
     def cluster(self, minutes=1):
         samples = []

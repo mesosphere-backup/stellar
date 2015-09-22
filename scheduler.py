@@ -13,6 +13,8 @@ class Slave:
 
 
 # TODO(nnielsen): Run Stellar scheduler in it's own thread.
+# TODO(nnielsen): Introduce print_stats() method which prints counts, last stats etc. for logging
+# TODO(nnielsen): Introduce stats() method which return recent metrics
 class Scheduler:
     def __init__(self):
         self.master_info = None

@@ -10,6 +10,7 @@ import mesos.native
 import metrics
 
 
+# TODO(nnielsen): Factor out data processing into helper class for testing.
 class StellarExecutor(mesos.interface.Executor):
     def launchTask(self, driver, task):
         def run_task():
@@ -115,8 +116,12 @@ class StellarExecutor(mesos.interface.Executor):
 
                         interval = sample['statistics']['timestamp'] - prev['statistics']['timestamp']
 
-                        user_time = sample['statistics']['cpus_user_time_secs'] - prev['statistics']['cpus_user_time_secs']
-                        system_time = sample['statistics']['cpus_system_time_secs'] - prev['statistics']['cpus_system_time_secs']
+                        user_time = sample['statistics']['cpus_user_time_secs'] - \
+                            prev['statistics']['cpus_user_time_secs']
+
+                        system_time = sample['statistics']['cpus_system_time_secs'] - \
+                            prev['statistics']['cpus_system_time_secs']
+
                         cpu_usage = float(user_time + system_time) / float(interval)
 
                         # Compute slack CPU.
