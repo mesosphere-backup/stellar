@@ -4,6 +4,8 @@ import mesos.native
 
 import scheduler
 import json
+import time
+import threading
 
 TASK_CPUS = 0.1
 TASK_MEM = 128
@@ -14,15 +16,47 @@ class MesosScheduler(mesos.interface.Scheduler):
         self.executor = executor
         self.scheduler = scheduler.Scheduler()
         self.record_queue = record_queue
+        self.stored_driver = None
 
-        # TODO(nnielsen): Periodically run reconciliation and node updates.
+        # TODO(nnielsen): Reduce scope of lock
+        self.scheduler_lock = threading.Lock()
+
+        # TODO(nnielsen): Make 5s interval configurable.
+        # Periodically run reconciliation and node updates.
+        def stop_unmonitored_tasks():
+            print "Reloading slaves @ %s" % time.ctime()
+
+            self.scheduler_lock.acquire()
+
+            self.scheduler.update()
+
+            if self.stored_driver is not None:
+                unmonitor = self.scheduler.unmonitor
+                for slave in unmonitor:
+                    print "Killing task %s: monitoring no longer needed" % slave.id
+                    self.stored_driver.killTask(slave.id)
+
+            self.scheduler_lock.release()
+
+            threading.Timer(5, stop_unmonitored_tasks).start()
+
+        stop_unmonitored_tasks()
 
     def registered(self, driver, framework_id, master_info):
+        self.scheduler_lock.acquire()
+
+        if self.stored_driver is None:
+            self.stored_driver = driver
+
         # TODO(nnielsen): Persist in zookeeper
         print "Registered with framework ID %s" % framework_id.value
         self.scheduler.update(master_info)
 
+        self.scheduler_lock.release()
+
     def resourceOffers(self, driver, offers):
+        self.scheduler_lock.acquire()
+
         for offer in offers:
             tasks = []
             offer_cpus = 0
@@ -81,7 +115,10 @@ class MesosScheduler(mesos.interface.Scheduler):
 
             driver.acceptOffers([offer.id], [operation])
 
+        self.scheduler_lock.release()
+
     def statusUpdate(self, driver, update):
+        self.scheduler_lock.acquire()
         print "Task %s is in state %s" % (update.task_id.value, mesos_pb2.TaskState.Name(update.state))
 
         self.scheduler.status_update(update.task_id.value, update.state)
@@ -91,3 +128,5 @@ class MesosScheduler(mesos.interface.Scheduler):
             if update.data is not None and 'timestamp' in update.data:
                 # TODO(nnielsen): Write up JSON Schema for status update data.
                 self.record_queue.put(json.loads(update.data))
+
+        self.scheduler_lock.release()

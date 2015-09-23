@@ -31,8 +31,8 @@ class Scheduler:
         self.staging = {}
         self.unmonitor = {}
 
-        # current i.e. which slaves are currently monitored
-        self.current = {}
+        # Running i.e. which slaves are currently monitored
+        self.running = {}
 
     # TODO(nnielsen): Verify slave removal.
     def update(self, master_info=None, state_json=None):
@@ -43,15 +43,22 @@ class Scheduler:
         if master_info is not None:
             self.master_info = master_info
 
+        # We have no way to update; abort
+        if state_json is None and self.master_info is None:
+            return
+
         # For testing, allow caller to give state_json.
-        if state_json is None:
+        if state_json is None and self.master_info is not None:
             state_endpoint = "http://" + self.master_info.hostname + ":" + str(self.master_info.port) + "/state.json"
             state_json = json_helper.from_url(state_endpoint)
+
 
         # Get node list
         new_targets = []
         for slave in state_json['slaves']:
             new_targets.append(slave['pid'].split('@')[1])
+
+        print "New targets: %s" % new_targets
 
         # Make copy of current targets, to identify deactivated slaves
         # TODO(nnielsen): Find lighter weight way of doing this.
@@ -66,14 +73,16 @@ class Scheduler:
                 self.monitor[slave.id] = slave
                 self.targets[new_target] = slave
 
-                if new_target in inactive_slaves:
-                    del inactive_slaves[new_target]
+            if new_target in inactive_slaves:
+                print "Don't remove %s" % new_target
+                del inactive_slaves[new_target]
 
         if len(inactive_slaves) > 0:
             print "%d slaves to be unmonitored" % len(inactive_slaves)
             for inactive_slave in inactive_slaves:
+                print "inactive_slave: %s" % inactive_slave
                 # TODO(nnielsen): Remove from monitor queue as well.
-                self.unmonitor[inactive_slave.id] = inactive_slave
+                self.unmonitor[inactive_slave] = inactive_slave
 
         self.stats()
 
@@ -97,27 +106,29 @@ class Scheduler:
                 print "Task %s is now monitoring" % slave_id
                 slave = self.staging[slave_id]
                 del self.staging[slave_id]
-                self.current[slave_id] = slave
+                self.running[slave_id] = slave
 
         elif (state == mesos_pb2.TASK_LOST) or (state == mesos_pb2.TASK_FAILED) or (state == mesos_pb2.TASK_ERROR):
             print "Lost task %s: rescheduling for monitoring" % slave_id
 
-            if slave_id in self.current:
-                slave = self.current[slave_id]
-                del self.current[slave_id]
+            if slave_id in self.running:
+                slave = self.running[slave_id]
+                del self.running[slave_id]
                 self.monitor[slave_id] = slave
 
             elif slave_id in self.staging:
                 slave = self.staging[slave_id]
                 del self.staging[slave_id]
                 self.monitor[slave_id] = slave
+            else:
+                print "WARNING: Won't restart task. Task not found."
 
         elif state == mesos_pb2.TASK_KILLED:
             if slave_id not in self.unmonitor:
-                if slave_id in self.current:
+                if slave_id in self.running:
                     print "Unintentional kill of task %s: rescheduling" % slave_id
-                    slave = self.current[slave_id]
-                    del self.current[slave_id]
+                    slave = self.running[slave_id]
+                    del self.running[slave_id]
                     self.monitor[slave_id] = slave
 
                 elif slave_id in self.staging:
@@ -135,6 +146,6 @@ class Scheduler:
         print "########## Status Update ##########"
         print "Slaves to monitor:        %d" % len(self.monitor)
         print "Slaves staging:           %d" % len(self.staging)
-        print "Slaves monitored:         %d" % len(self.current)
+        print "Slaves monitored:         %d" % len(self.running)
         print "Slaves to unmonitor:      %d" % len(self.unmonitor)
         print "###################################"
