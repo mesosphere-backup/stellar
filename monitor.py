@@ -62,7 +62,7 @@ def validate_record(record):
 # TODO(nnielsen): Introduce print_stats() method which prints counts, last stats etc. for logging
 # TODO(nnielsen): Introduce stats() method which return recent metrics
 class Monitor:
-    def __init__(self, record_queue, bucket_size=60, sample_limits=60):
+    def __init__(self, record_queue, bucket_size=5, sample_limits=120):
         self.record_queue = record_queue
         self.stats_lock = threading.Lock()
 

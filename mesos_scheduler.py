@@ -32,13 +32,19 @@ class MesosScheduler(mesos.interface.Scheduler):
 
             if self.stored_driver is not None:
                 unmonitor = self.scheduler.unmonitor
-                for slave in unmonitor:
-                    print "Killing task %s: monitoring no longer needed" % slave.id
-                    self.stored_driver.killTask(slave.id)
+                for slave_id, slave in unmonitor.iteritems():
+                    task_id = mesos_pb2.TaskID()
+                    task_id.value = slave_id
+
+                    if slave_id in self.scheduler.running or slave_id in self.scheduler.staging:
+                        print "Killing task %s" % task_id.value
+                        self.stored_driver.killTask(task_id)
+
+                    # TODO(nnielsen): Introduce retry for task killing.
 
             self.scheduler_lock.release()
 
-            threading.Timer(5, stop_unmonitored_tasks).start()
+            threading.Timer(1, stop_unmonitored_tasks).start()
 
         stop_unmonitored_tasks()
 

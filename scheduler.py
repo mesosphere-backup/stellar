@@ -17,6 +17,8 @@ class Slave:
 # TODO(nnielsen): Introduce print_stats() method which prints counts, last stats etc. for logging
 # TODO(nnielsen): Introduce stats() method which return recent metrics
 # TODO(nnielsen): Introduce heart beats from the executors.
+# TODO(nnielsen): Introduce way to encode the tracking_tasks as state machines themselves, and have them move between
+#                 Queues.
 class Scheduler:
     def __init__(self):
         self.master_info = None
@@ -52,8 +54,7 @@ class Scheduler:
             state_endpoint = "http://" + self.master_info.hostname + ":" + str(self.master_info.port) + "/state.json"
             state_json = json_helper.from_url(state_endpoint)
 
-
-        # Get node list
+        # Get node list.
         new_targets = []
         for slave in state_json['slaves']:
             new_targets.append(slave['pid'].split('@')[1])
@@ -79,10 +80,18 @@ class Scheduler:
 
         if len(inactive_slaves) > 0:
             print "%d slaves to be unmonitored" % len(inactive_slaves)
-            for inactive_slave in inactive_slaves:
+            for inactive_slave, slave in inactive_slaves.iteritems():
                 print "inactive_slave: %s" % inactive_slave
                 # TODO(nnielsen): Remove from monitor queue as well.
-                self.unmonitor[inactive_slave] = inactive_slave
+                self.unmonitor[slave.id] = inactive_slave
+
+                if slave.id in self.monitor:
+                    # Don't try to schedule for monitoring, if we decided slave is gone.
+                    del self.monitor[slave.id]
+
+                    # And no longer a target.
+                    if slave.hostname in self.targets:
+                        del self.targets[slave.hostname]
 
         self.stats()
 
@@ -111,7 +120,17 @@ class Scheduler:
         elif (state == mesos_pb2.TASK_LOST) or (state == mesos_pb2.TASK_FAILED) or (state == mesos_pb2.TASK_ERROR):
             print "Lost task %s: rescheduling for monitoring" % slave_id
 
-            if slave_id in self.running:
+            if slave_id in self.unmonitor:
+                del self.unmonitor[slave_id]
+
+                # Don't restart: we intended to kill task.
+                if slave_id in self.running:
+                    del self.running[slave_id]
+
+                elif slave_id in self.staging:
+                    del self.staging[slave_id]
+
+            elif slave_id in self.running:
                 slave = self.running[slave_id]
                 del self.running[slave_id]
                 self.monitor[slave_id] = slave
@@ -136,6 +155,14 @@ class Scheduler:
                     slave = self.staging[slave_id]
                     del self.staging[slave_id]
                     self.monitor[slave_id] = slave
+            else:
+                if slave_id in self.running:
+                    del self.running[slave_id]
+
+                elif slave_id in self.staging:
+                    del self.staging[slave_id]
+
+                del self.unmonitor[slave_id]
         else:
             print "Warning: unhandled task state"
 
