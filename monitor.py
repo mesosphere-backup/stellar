@@ -153,33 +153,47 @@ class Monitor:
 
                         self.stats_lock.acquire()
 
-                        # TODO(nnielsen): Wrap 'Average' or 'Aggregate' for set of metrics.
-                        cluster_cpu_allocation_slack = Average()
-                        cluster_cpu_usage_slack = Average()
-                        cluster_cpu_usage = Average()
-                        cluster_mem_allocation_slack = Average()
-                        cluster_mem_usage_slack = Average()
-                        cluster_mem_usage = Average()
+                        cluster_cpu_allocation_slack = 0.0
+                        cluster_cpu_usage_slack = 0.0
+                        cluster_cpu_usage = 0.0
+                        cluster_mem_allocation_slack = 0.0
+                        cluster_mem_usage_slack = 0.0
+                        cluster_mem_usage = 0.0
 
                         # TODO(nnielsen): Compute and store framework and executor aggregates.
                         for framework_id, framework in frameworks.iteritems():
+                            # TODO(nnielsen): Wrap 'Average' or 'Aggregate' for set of metrics.
+                            framework_cpu_allocation_slack = Average()
+                            framework_cpu_usage_slack = Average()
+                            framework_cpu_usage = Average()
+                            framework_mem_allocation_slack = Average()
+                            framework_mem_usage_slack = Average()
+                            framework_mem_usage = Average()
+
                             for executor_id, executor in framework.iteritems():
                                 for sample in executor:
                                     # Add samples to corresponding aggregates
-                                    cluster_cpu_allocation_slack.add(sample['cpu_allocation_slack'])
-                                    cluster_cpu_usage_slack.add(sample['cpu_usage_slack'])
-                                    cluster_cpu_usage.add(sample['cpu_usage'])
-                                    cluster_mem_allocation_slack.add(sample['mem_allocation_slack'])
-                                    cluster_mem_usage_slack.add(sample['mem_usage_slack'])
-                                    cluster_mem_usage.add(sample['mem_usage'])
+                                    framework_cpu_allocation_slack.add(sample['cpu_allocation_slack'])
+                                    framework_cpu_usage_slack.add(sample['cpu_usage_slack'])
+                                    framework_cpu_usage.add(sample['cpu_usage'])
+                                    framework_mem_allocation_slack.add(sample['mem_allocation_slack'])
+                                    framework_mem_usage_slack.add(sample['mem_usage_slack'])
+                                    framework_mem_usage.add(sample['mem_usage'])
+
+                            cluster_cpu_allocation_slack += framework_cpu_allocation_slack.compute()
+                            cluster_cpu_usage_slack += framework_cpu_usage_slack.compute()
+                            cluster_cpu_usage += framework_cpu_usage.compute()
+                            cluster_mem_allocation_slack += framework_mem_allocation_slack.compute()
+                            cluster_mem_usage_slack += framework_mem_usage_slack.compute()
+                            cluster_mem_usage += framework_mem_usage.compute()
 
                         self.cluster_avgs[self.cluster_current_index] = {
-                            'cpu_allocation_slack': cluster_cpu_allocation_slack.compute(),
-                            'cpu_usage_slack': cluster_cpu_usage_slack.compute(),
-                            'cpu_usage':       cluster_cpu_usage.compute(),
-                            'mem_allocation_slack': cluster_mem_allocation_slack.compute(),
-                            'mem_usage_slack': cluster_mem_usage_slack.compute(),
-                            'mem_usage':       cluster_mem_usage.compute(),
+                            'cpu_allocation_slack': cluster_cpu_allocation_slack,
+                            'cpu_usage_slack': cluster_cpu_usage_slack,
+                            'cpu_usage':       cluster_cpu_usage,
+                            'mem_allocation_slack': cluster_mem_allocation_slack,
+                            'mem_usage_slack': cluster_mem_usage_slack,
+                            'mem_usage':       cluster_mem_usage,
                             'timestamp':       self.cluster_start
                         }
 

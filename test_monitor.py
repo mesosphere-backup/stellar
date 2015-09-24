@@ -65,5 +65,52 @@ class TestMonitor(TestCase):
         m.stop()
         m.join()
 
+    def test_multiple_tasks(self):
+        record_queue = Queue.Queue()
+        m = monitor.Monitor(record_queue, 6, 10)
+        m.start()
+
+        # Get base for timestamps
+        base = time.time()
+
+        cpu_allocation_slack = 4
+        cpu_usage_slack = 0.5
+        cpu_usage = 0.5
+        mem_allocation_slack = 45
+        mem_usage_slack = 32
+        mem_usage = 512
+
+        framework_id = "foobarbaz"
+        executor_id = "foobarbaz"
+
+        for j in range(1200):
+            for i in range(10):
+                record_queue.put([{
+                    'timestamp': base + j,
+                    'framework_id': framework_id + str(i),
+                    'executor_id': executor_id,
+                    'cpu_allocation_slack': cpu_allocation_slack,
+                    'cpu_usage_slack': cpu_usage_slack,
+                    'cpu_usage': cpu_usage,
+                    'mem_allocation_slack': mem_allocation_slack,
+                    'mem_usage_slack': mem_usage_slack,
+                    'mem_usage': mem_usage
+                }])
+
+        sample_min1 = m.cluster()
+
+        self.assertEqual(len(sample_min1), 1)
+
+        # All samples are identical and average should be the input samples.
+        self.assertEqual(sample_min1[0]['cpu_allocation_slack'], cpu_allocation_slack * 10)
+        self.assertEqual(sample_min1[0]['cpu_usage_slack'], cpu_usage_slack * 10)
+        self.assertEqual(sample_min1[0]['cpu_usage'], cpu_usage * 10)
+        self.assertEqual(sample_min1[0]['mem_allocation_slack'], mem_allocation_slack * 10)
+        self.assertEqual(sample_min1[0]['mem_usage_slack'], mem_usage_slack * 10)
+        self.assertEqual(sample_min1[0]['mem_usage'], mem_usage * 10)
+
+        m.stop()
+        m.join()
+
 if __name__ == '__main__':
     unittest.main()

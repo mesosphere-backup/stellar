@@ -50,7 +50,7 @@ app = Flask('stellar')
 
 @app.route('/')
 def ui():
-    return render_template("index.html")
+    return render_template("slack.html")
 
 
 @app.route('/cluster')
@@ -77,11 +77,11 @@ if __name__ == "__main__":
 
     # TODO(nnielsen): Run executor from docker hub instead.
     url = executor.command.uris.add()
-    url.value = "/home/vagrant/stellar/collect.py"
+    url.value = os.path.abspath("collect.py")
     url = executor.command.uris.add()
-    url.value = "/home/vagrant/stellar/json_helper.py"
+    url.value = os.path.abspath("json_helper.py")
     url = executor.command.uris.add()
-    url.value = "/home/vagrant/stellar/metrics.py"
+    url.value = os.path.abspath("metrics.py")
 
     framework = mesos_pb2.FrameworkInfo()
     framework.user = ""
