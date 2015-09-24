@@ -1,0 +1,98 @@
+<!doctype html>
+<html>
+	<head>
+		<title>DCOS Slack Meter</title>
+		<script src="{{ url_for('static', filename='Chart.min.js') }}"></script>
+		<style>
+			body{
+				padding: 0;
+				margin: 0;
+        		background-color: rgb(26, 30, 42)
+			}
+			#canvas-holder{
+        		margin: 15% auto 0;
+				width:30%;
+			}
+
+      #legend {
+        margin: 15px auto;
+        width: 30%;
+        font-size: 20pt;
+        font-family: 'Source Sans Pro', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+        font-weight: 300;
+        text-align: center;
+        color: white;
+      }
+		</style>
+	</head>
+	<body>
+		<div id="canvas-holder">
+			<canvas id="chart-area" width="500" height="500"/>
+		</div>
+
+    <div id="legend"></div>
+
+
+	<script>
+		var doughnutData = [
+				{
+					value: 10,
+					color:"#F7464A",
+					highlight: "#FF5A5E",
+					label: "Usage slack"
+				},
+				{
+					value: 50,
+					color: "#46BFBD",
+					highlight: "#5AD3D1",
+					label: "Usage"
+				},
+				{
+					value: 40,
+					color: "#949FB1",
+					highlight: "#A8B3C5",
+					label: "Allocation slack"
+				}
+			];
+
+			window.onload = function(){
+				var ctx = document.getElementById("chart-area").getContext("2d");
+				window.myDoughnut = new Chart(ctx).Doughnut(doughnutData, {
+          			responsive : true,
+          			segmentStrokeWidth : 1,
+          			segmentStrokeColor : "rgb(26, 30, 42)",
+          			percentageInnerCutout : 95,
+          			customTooltips: function(tooltip) {
+
+            		if (!tooltip) {
+              			return;
+            		}
+
+            		document.getElementById("legend").innerHTML=tooltip.text+" CPUs"
+            }
+        });
+
+        var val = 10;
+        var intervalID = setInterval(function(){
+            var xmlhttp = new XMLHttpRequest();
+            var url = "/cluster";
+
+            xmlhttp.onreadystatechange = function() {
+                if (xmlhttp.readyState == 4 && xmlhttp.status == 200) {
+                    var samples = JSON.parse(xmlhttp.responseText);
+                    console.log(samples);
+
+                    window.myDoughnut.segments[0].value = samples[0]['cpu_usage_slack'].toFixed(3)
+                    window.myDoughnut.segments[1].value = samples[0]['cpu_usage'].toFixed(3)
+                    window.myDoughnut.segments[2].value = samples[0]['cpu_allocation_slack'].toFixed(3)
+
+                    window.myDoughnut.update();
+                }
+            }
+            xmlhttp.open("GET", url, true);
+            xmlhttp.send();
+        }, 1000);
+	};
+	</script>
+	</body>
+</html>

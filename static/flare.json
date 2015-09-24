@@ -1,7 +1,0 @@
-{
-   "name": "analytics",
-   "children": [
-      {"name": "slack", "size": 0.09430126417906767},
-      {"name": "usage", "size": 0.005698735820932328}
-   ]
-}x
