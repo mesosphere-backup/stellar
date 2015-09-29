@@ -1,75 +1,108 @@
+"""
+This module contains the logic to aggregate samples in memory and serve them to the HTTP thread.
+"""
+
 import threading
 import Queue
 import json
+import exceptions
 
 
-# TODO(nnielsen): Make this an 'Aggregate' instead (with count, min, max,
-# etc).
-class Average:
+class Average(object):
+    """
+    This class helps keeping average values (simply avoiding keeping track of sum and count).
+    Meant to be expanded to be a general Aggregate class, serving min, max, count, etc.
+    """
+
     def __init__(self):
+        """
+        Average instance constructor.
+        """
         self.count = 0
         self.sum = 0.0
-        self.min = None
-        self.max = None
 
     def add(self, value):
+        """
+        Add sample to this average.
+
+        :param value:
+        """
         self.sum += value
         self.count += 1
 
     def compute(self):
+        """
+        Computes the average value based on added samples.
+
+        :return: Average of samples.
+        """
         if self.count is 0:
             return 0
         return float(self.sum) / float(self.count)
 
 
 def validate_record(record):
+    """
+    Validates record received from the executor (JSON data in task.data).
+
+    :param record: JSON object from task.data
+    :return: True if record is valid. Otherwise false.
+    """
+    result = True
     if 'timestamp' not in record:
-        return False
+        result = False
 
     if not isinstance(record['timestamp'], float):
-        return False
+        result = False
 
     if 'framework_id' not in record:
-        return False
+        result = False
 
     if 'executor_id' not in record:
-        return False
+        result = False
 
     if 'cpu_allocation_slack' not in record:
-        return False
+        result = False
 
     if 'cpu_usage_slack' not in record:
-        return False
+        result = False
 
     if 'cpu_usage' not in record:
-        return False
+        result = False
 
     if 'mem_allocation_slack' not in record:
-        return False
+        result = False
 
     if 'mem_usage_slack' not in record:
-        return False
+        result = False
 
     if 'mem_usage' not in record:
-        return False
+        result = False
 
     if 'timestamp' not in record:
-        return False
+        result = False
 
-    return True
+    return result
 
 
 # TODO(nnielsen): Introduce print_stats() method which prints counts, last stats etc. for logging
 # TODO(nnielsen): Introduce stats() method which return recent metrics
-class Monitor:
+class Monitor(object):
+    """
+    This class drains the record queue and stores cluster averages in a circular buffer.
+    """
+
     def __init__(self, record_queue, bucket_size=5, sample_limits=120):
+        """
+
+        :param record_queue:
+        :param bucket_size:
+        :param sample_limits:
+        """
         self.record_queue = record_queue
         self.stats_lock = threading.Lock()
 
-        # Bucket size is 60 seconds
         self.bucket_size = bucket_size
-
-        # Keep samples for max 1hr
         self.sample_limits = sample_limits
 
         # TODO(nnielsen): This bucket is prone to clock skew i.e. a single slave can invalidate the
@@ -82,7 +115,7 @@ class Monitor:
         self.cluster_current_index = 0
         self.cluster_avgs = []
 
-        for i in range(self.sample_limits):
+        for _ in range(self.sample_limits):
             self.cluster_avgs.append(None)
 
         self.thread = None
@@ -98,7 +131,15 @@ class Monitor:
         }
 
     def start(self):
+        """
+        Starts main thread of monitor.
+        """
+
         def run_task():
+            """
+            Entry for sample processing thread which drains the record queue and maintains the
+            circular buffer.
+            """
             iteration = 0
 
             while True:
@@ -120,14 +161,16 @@ class Monitor:
                     records = self.record_queue.get(True, 1)
                 except Queue.Empty:
                     continue
+                except exceptions.AttributeError:
+                    break
 
                 for record in records:
                     if not validate_record(record):
                         print "Skipping sample: malformed %s" % json.dumps(record)
                         continue
 
-                    ts = record['timestamp']
-                    current_minute = int(ts / self.bucket_size)
+                    timestamp = record['timestamp']
+                    current_minute = int(timestamp / self.bucket_size)
 
                     if self.cluster_start == 0:
 
@@ -173,13 +216,16 @@ class Monitor:
                             for executor_id, executor in framework.iteritems():
                                 for sample in executor:
                                     # Add samples to corresponding aggregates
-                                    framework_cpu_allocation_slack.add(sample['cpu_allocation_slack'])
+                                    framework_cpu_allocation_slack.\
+                                        add(sample['cpu_allocation_slack'])
                                     framework_cpu_usage_slack.add(sample['cpu_usage_slack'])
                                     framework_cpu_usage.add(sample['cpu_usage'])
-                                    framework_mem_allocation_slack.add(sample['mem_allocation_slack'])
+                                    framework_mem_allocation_slack.\
+                                        add(sample['mem_allocation_slack'])
                                     framework_mem_usage_slack.add(sample['mem_usage_slack'])
                                     framework_mem_usage.add(sample['mem_usage'])
 
+                            # TODO(nnielsen): DO NOT aggregate allocation slacks! Average per slave.
                             cluster_cpu_allocation_slack += framework_cpu_allocation_slack.compute()
                             cluster_cpu_usage_slack += framework_cpu_usage_slack.compute()
                             cluster_cpu_usage += framework_cpu_usage.compute()
@@ -189,12 +235,12 @@ class Monitor:
 
                         self.cluster_avgs[self.cluster_current_index] = {
                             'cpu_allocation_slack': cluster_cpu_allocation_slack,
-                            'cpu_usage_slack': cluster_cpu_usage_slack,
-                            'cpu_usage':       cluster_cpu_usage,
+                            'cpu_usage_slack':      cluster_cpu_usage_slack,
+                            'cpu_usage':            cluster_cpu_usage,
                             'mem_allocation_slack': cluster_mem_allocation_slack,
-                            'mem_usage_slack': cluster_mem_usage_slack,
-                            'mem_usage':       cluster_mem_usage,
-                            'timestamp':       self.cluster_start
+                            'mem_usage_slack':      cluster_mem_usage_slack,
+                            'mem_usage':            cluster_mem_usage,
+                            'timestamp':            self.cluster_start
                         }
 
                         self.cluster_start = current_minute
@@ -218,22 +264,38 @@ class Monitor:
                     self.cluster_current.append(record)
 
         self.thread = threading.Thread(target=run_task)
+        self.thread.daemon = True
         self.thread.start()
 
-    def join(self):
-        self.thread.join()
+    def join(self, timeout=None):
+        """
+        Joins backing monitor thread.
+        """
+        if timeout is not None:
+            self.thread.join(timeout)
+        else:
+            self.thread.join()
 
     def stop(self):
+        """
+        Signals to backing thread to stop progress.
+        """
         self.stop_lock.acquire()
         self.stop_status = True
         self.stop_lock.release()
 
-    def cluster(self, minutes=1):
+    def cluster(self, sample_count=1):
+        """
+        Supports the HTTP API and returns the computed samples.
+
+        :param sample_count: Number of samples to return.
+        :return: An array of samples
+        """
         samples = []
         self.stats_lock.acquire()
 
         # Make sure we don't exceed the sample size.
-        limit = min(minutes, self.sample_limits)
+        limit = min(sample_count, self.sample_limits)
 
         # self.cluster_current_index points to current sample (which is currently being built). We
         # need to subtract one to get previous (not in progress) aggregate.

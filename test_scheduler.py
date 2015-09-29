@@ -28,7 +28,7 @@ class TestScheduler(TestCase):
         self.assertEqual(len(s.running), 0)
 
         # Mimic that we launched the task
-        s.status_update(s.targets['foo-01'].id, mesos_pb2.TASK_STAGING)
+        s.status_update(s.targets['foo-01'].task_id, mesos_pb2.TASK_STAGING)
 
         # Should now be in staging queue
         self.assertEqual(len(s.monitor), 0)
@@ -36,7 +36,7 @@ class TestScheduler(TestCase):
         self.assertEqual(len(s.running), 0)
 
         # Mimic that task is running
-        s.status_update(s.targets['foo-01'].id, mesos_pb2.TASK_RUNNING)
+        s.status_update(s.targets['foo-01'].task_id, mesos_pb2.TASK_RUNNING)
 
         self.assertEqual(len(s.monitor), 0)
         self.assertEqual(len(s.staging), 0)
@@ -63,7 +63,7 @@ class TestScheduler(TestCase):
         self.assertEqual(len(s.running), 0)
 
         # Mimic that we launched the task
-        s.status_update(s.targets['foo-01'].id, mesos_pb2.TASK_STAGING)
+        s.status_update(s.targets['foo-01'].task_id, mesos_pb2.TASK_STAGING)
 
         # Should now be in staging queue
         self.assertEqual(len(s.monitor), 0)
@@ -71,7 +71,7 @@ class TestScheduler(TestCase):
         self.assertEqual(len(s.running), 0)
 
         # Mimic that task failed. Verify that it is back in monitor queue.
-        s.status_update(s.targets['foo-01'].id, mesos_pb2.TASK_LOST)
+        s.status_update(s.targets['foo-01'].task_id, mesos_pb2.TASK_LOST)
 
         self.assertEqual(len(s.monitor), 1)
         self.assertEqual(len(s.staging), 0)
@@ -100,7 +100,7 @@ class TestScheduler(TestCase):
         self.assertEqual(len(s.running), 0)
 
         # Mimic that we launched the task
-        s.status_update(s.targets['foo-01'].id, mesos_pb2.TASK_STAGING)
+        s.status_update(s.targets['foo-01'].task_id, mesos_pb2.TASK_STAGING)
 
         # Should now be in staging queue
         self.assertEqual(len(s.monitor), 1)
@@ -108,19 +108,19 @@ class TestScheduler(TestCase):
         self.assertEqual(len(s.running), 0)
 
         # Mimic that we launched the task
-        s.status_update(s.targets['foo-02'].id, mesos_pb2.TASK_STAGING)
+        s.status_update(s.targets['foo-02'].task_id, mesos_pb2.TASK_STAGING)
 
         # Should now be in staging queue
         self.assertEqual(len(s.monitor), 0)
         self.assertEqual(len(s.staging), 2)
         self.assertEqual(len(s.running), 0)
 
-        s.status_update(s.targets['foo-01'].id, mesos_pb2.TASK_RUNNING)
+        s.status_update(s.targets['foo-01'].task_id, mesos_pb2.TASK_RUNNING)
         self.assertEqual(len(s.monitor), 0)
         self.assertEqual(len(s.staging), 1)
         self.assertEqual(len(s.running), 1)
 
-        s.status_update(s.targets['foo-02'].id, mesos_pb2.TASK_RUNNING)
+        s.status_update(s.targets['foo-02'].task_id, mesos_pb2.TASK_RUNNING)
         self.assertEqual(len(s.monitor), 0)
         self.assertEqual(len(s.staging), 0)
         self.assertEqual(len(s.running), 2)
@@ -148,7 +148,7 @@ class TestScheduler(TestCase):
         self.assertEqual(len(s.running), 0)
 
         # Mimic that we launched the task
-        s.status_update(s.targets['foo-01'].id, mesos_pb2.TASK_STAGING)
+        s.status_update(s.targets['foo-01'].task_id, mesos_pb2.TASK_STAGING)
 
         # Should now be in staging queue
         self.assertEqual(len(s.monitor), 1)
@@ -156,19 +156,19 @@ class TestScheduler(TestCase):
         self.assertEqual(len(s.running), 0)
 
         # Mimic that we launched the task
-        s.status_update(s.targets['foo-02'].id, mesos_pb2.TASK_STAGING)
+        s.status_update(s.targets['foo-02'].task_id, mesos_pb2.TASK_STAGING)
 
         # Should now be in staging queue
         self.assertEqual(len(s.monitor), 0)
         self.assertEqual(len(s.staging), 2)
         self.assertEqual(len(s.running), 0)
 
-        s.status_update(s.targets['foo-01'].id, mesos_pb2.TASK_RUNNING)
+        s.status_update(s.targets['foo-01'].task_id, mesos_pb2.TASK_RUNNING)
         self.assertEqual(len(s.monitor), 0)
         self.assertEqual(len(s.staging), 1)
         self.assertEqual(len(s.running), 1)
 
-        s.status_update(s.targets['foo-02'].id, mesos_pb2.TASK_RUNNING)
+        s.status_update(s.targets['foo-02'].task_id, mesos_pb2.TASK_RUNNING)
         self.assertEqual(len(s.monitor), 0)
         self.assertEqual(len(s.staging), 0)
         self.assertEqual(len(s.running), 2)
@@ -189,7 +189,7 @@ class TestScheduler(TestCase):
         self.assertEqual(len(s.unmonitor), 1)
 
         # Mimic killing of task.
-        s.status_update(s.targets['foo-01'].id, mesos_pb2.TASK_KILLED)
+        s.status_update(s.targets['foo-01'].task_id, mesos_pb2.TASK_KILLED)
         self.assertEqual(len(s.monitor), 0)
         self.assertEqual(len(s.staging), 0)
         self.assertEqual(len(s.running), 1)
@@ -214,14 +214,14 @@ class TestScheduler(TestCase):
         self.assertEqual(len(s.running), 0)
 
         # Mimic that we launched the task
-        s.status_update(s.targets['foo-01'].id, mesos_pb2.TASK_STAGING)
+        s.status_update(s.targets['foo-01'].task_id, mesos_pb2.TASK_STAGING)
 
         # Should now be in staging queue
         self.assertEqual(len(s.monitor), 0)
         self.assertEqual(len(s.staging), 1)
         self.assertEqual(len(s.running), 0)
 
-        s.status_update(s.targets['foo-01'].id, mesos_pb2.TASK_RUNNING)
+        s.status_update(s.targets['foo-01'].task_id, mesos_pb2.TASK_RUNNING)
         self.assertEqual(len(s.monitor), 0)
         self.assertEqual(len(s.staging), 0)
         self.assertEqual(len(s.running), 1)
@@ -237,7 +237,7 @@ class TestScheduler(TestCase):
         self.assertEqual(len(s.unmonitor), 1)
 
         # Slave is gone - but so is the task that was running on it.
-        s.status_update(s.targets['foo-01'].id, mesos_pb2.TASK_LOST)
+        s.status_update(s.targets['foo-01'].task_id, mesos_pb2.TASK_LOST)
         self.assertEqual(len(s.monitor), 0)
         self.assertEqual(len(s.staging), 0)
         self.assertEqual(len(s.running), 0)

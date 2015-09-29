@@ -1,20 +1,9 @@
 #!/usr/bin/env python
+"""
+This module contain the entry for running the stellar framework.
+"""
 
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# pylint: disable=no-member, invalid-name
 
 import Queue
 import json
@@ -22,6 +11,7 @@ import os
 import sys
 import threading
 import monitor
+import time
 
 import mesos.interface
 from mesos.interface import mesos_pb2
@@ -50,11 +40,21 @@ app = Flask('stellar')
 
 @app.route('/')
 def ui():
+    """
+    / endpoint hosting the Web UI.
+
+    :return: HTML rendered from templates/slack.html
+    """
     return render_template("slack.html")
 
 
 @app.route('/cluster')
 def cluster():
+    """
+    /cluster endpoint hosting the statistics for the Web UI and external tooling.
+
+    :return: JSON of usage statistics samples.
+    """
     limit = int(request.args.get('limit', 1))
     print "Requesting %d samples" % limit
     return json.dumps(m.cluster(limit))
@@ -64,20 +64,18 @@ def cluster():
 # TODO(nnielsen): Parse secret and principal from command line arguments.
 # TODO(nnielsen): Make Flask port configurable
 if __name__ == "__main__":
-    """
-    """
     if len(sys.argv) != 2:
         print "Usage: %s master" % sys.argv[0]
         sys.exit(1)
 
     executor = mesos_pb2.ExecutorInfo()
     executor.executor_id.value = "default"
-    executor.command.value = "python collect.py"
+    executor.command.value = "python mesos_executor.py"
     executor.name = "Stellar Executor"
 
     # TODO(nnielsen): Run executor from docker hub instead.
     url = executor.command.uris.add()
-    url.value = os.path.abspath("collect.py")
+    url.value = os.path.abspath("mesos_executor.py")
     url = executor.command.uris.add()
     url.value = os.path.abspath("json_helper.py")
     url = executor.command.uris.add()
@@ -101,7 +99,7 @@ if __name__ == "__main__":
 
         if not os.getenv("DEFAULT_PRINCIPAL"):
             print "Expecting authentication principal in the environment"
-            sys.exit(1);
+            sys.exit(1)
 
         credential = mesos_pb2.Credential()
         credential.principal = os.getenv("DEFAULT_PRINCIPAL")
@@ -131,11 +129,21 @@ if __name__ == "__main__":
     # Host stats endpoints
     #
     def run_flask():
+        """
+        Entry to HTTP server thread.
+        """
+
         app.run(host='0.0.0.0')
+
     http_thread = threading.Thread(target=run_flask)
+    http_thread.daemon = True
     http_thread.start()
 
-    status = 0 if driver.run() == mesos_pb2.DRIVER_STOPPED else 1
+    status = 0 if driver.start() == mesos_pb2.DRIVER_STOPPED else 1
+
+    # Block main thread.
+    while True:
+        time.sleep(1)
 
     # Ensure that the driver process terminates.
     driver.stop()
@@ -143,8 +151,8 @@ if __name__ == "__main__":
     # TODO(nnielsen): Signal stop() to monitor thread.
     # TODO(nnielsen): Signal stop() to HTTP thread.
 
-    m.join()
+    m.join(2000)
 
-    http_thread.join()
+    http_thread.join(2000)
 
     sys.exit(status)

@@ -1,3 +1,11 @@
+"""
+This module contain the main scheduler in Stellar (not the Mesos Scheduler, but the component
+which gets Agent lists from the current active master and generate tasks to monitor new Agents
+or killTask requests to stop monitoring inactive Agents.
+"""
+
+# pylint: disable=unused-import
+
 import uuid
 import json_helper
 import copy
@@ -7,9 +15,13 @@ from mesos.interface import mesos_pb2
 import mesos.native
 
 
-class Slave:
+class Agent(object):
+    """
+    Simple container to generate an unique id for the Agent (for the task id) and mapping it
+    to the hostname and port to monitor.
+    """
     def __init__(self, hostname):
-        self.id = str(uuid.uuid4())
+        self.task_id = str(uuid.uuid4())
         self.hostname = hostname
 
 
@@ -17,9 +29,15 @@ class Slave:
 # TODO(nnielsen): Introduce print_stats() method which prints counts, last stats etc. for logging
 # TODO(nnielsen): Introduce stats() method which return recent metrics
 # TODO(nnielsen): Introduce heart beats from the executors.
-# TODO(nnielsen): Introduce way to encode the tracking_tasks as state machines themselves, and have them move between
-#                 Queues.
-class Scheduler:
+# TODO(nnielsen): Introduce way to encode the tracking_tasks as state machines themselves, and have
+#                 them move between Queues.
+class Scheduler(object):
+    """
+    Scheduler in Stellar (not the Mesos Scheduler, but the component which gets Agent lists from
+    the current active master and generate tasks to monitor new Agents or killTask requests to stop
+    monitoring inactive Agents.
+    """
+
     def __init__(self):
         self.master_info = None
 
@@ -36,11 +54,11 @@ class Scheduler:
         # Running i.e. which slaves are currently monitored
         self.running = {}
 
-    # TODO(nnielsen): Verify slave removal.
     def update(self, master_info=None, state_json=None):
         """
         Get new node list from master.
-        If master_info is set (during registration and reregistration), a new master url will be set.
+        If master_info is set (during registration and reregistration),
+        a new master url will be set.
         """
         if master_info is not None:
             self.master_info = master_info
@@ -51,7 +69,9 @@ class Scheduler:
 
         # For testing, allow caller to give state_json.
         if state_json is None and self.master_info is not None:
-            state_endpoint = "http://" + self.master_info.hostname + ":" + str(self.master_info.port) + "/state.json"
+            state_endpoint = "http://" + self.master_info.hostname + ":" + \
+                str(self.master_info.port) + "/state.json"
+
             state_json = json_helper.from_url(state_endpoint)
 
         # Get node list.
@@ -67,11 +87,11 @@ class Scheduler:
 
         for new_target in new_targets:
             if new_target not in self.targets:
-                slave = Slave(new_target)
+                slave = Agent(new_target)
 
                 # TODO(nnielsen): Persist map id -> host to zookeeper.
 
-                self.monitor[slave.id] = slave
+                self.monitor[slave.task_id] = slave
                 self.targets[new_target] = slave
 
             if new_target in inactive_slaves:
@@ -83,11 +103,11 @@ class Scheduler:
             for inactive_slave, slave in inactive_slaves.iteritems():
                 print "inactive_slave: %s" % inactive_slave
                 # TODO(nnielsen): Remove from monitor queue as well.
-                self.unmonitor[slave.id] = inactive_slave
+                self.unmonitor[slave.task_id] = inactive_slave
 
-                if slave.id in self.monitor:
+                if slave.task_id in self.monitor:
                     # Don't try to schedule for monitoring, if we decided slave is gone.
-                    del self.monitor[slave.id]
+                    del self.monitor[slave.task_id]
 
                     # And no longer a target.
                     if slave.hostname in self.targets:
@@ -96,9 +116,13 @@ class Scheduler:
         self.stats()
 
     def status_update(self, slave_id, state):
-        # If task is staging (synthesized by the mesos scheduler loop to represent 'launched but not yet started',
-        # we move slave from 'monitor' to 'staging' list. If the launch fails, we need to move the slave back to the
-        # 'monitor' list.
+        """
+        If task is staging (synthesized by the mesos scheduler loop to represent
+        'launched but not yet started',
+        we move slave from 'monitor' to 'staging' list. If the launch fails,
+        we need to move the slave back to the 'monitor' list.
+        """
+
         print "Received %s in state %d %d" % (slave_id, state, mesos_pb2.TASK_LOST)
 
         if state == mesos_pb2.TASK_STAGING:
@@ -117,7 +141,10 @@ class Scheduler:
                 del self.staging[slave_id]
                 self.running[slave_id] = slave
 
-        elif (state == mesos_pb2.TASK_LOST) or (state == mesos_pb2.TASK_FAILED) or (state == mesos_pb2.TASK_ERROR):
+        elif (state == mesos_pb2.TASK_LOST) or \
+             (state == mesos_pb2.TASK_FAILED) or \
+             (state == mesos_pb2.TASK_ERROR):
+
             print "Lost task %s: rescheduling for monitoring" % slave_id
 
             if slave_id in self.unmonitor:
@@ -169,6 +196,9 @@ class Scheduler:
         self.stats()
 
     def stats(self):
+        """
+        Prints out statistics about agent queues.
+        """
         # TODO(nnielsen): Update stats/metrics object instead.
         print "########## Status Update ##########"
         print "Slaves to monitor:        %d" % len(self.monitor)
